@@ -239,6 +239,9 @@ class ExamApp:
         self.root.title("业余无线电考试模拟训练系统")
         self.root.geometry("900x700")
         
+        # 设置窗口图标
+        self.set_window_icon(self.root)
+        
         self.bank = QuestionBank()
         self.current_questions: List[Question] = []
         self.current_index = 0
@@ -247,8 +250,57 @@ class ExamApp:
         self.exam_start_time = None
         self.search_mode = False  # 是否在搜题模式
         self.before_search_state = None  # 搜题前的状态 (questions, index)
+        self.option_mapping = {}  # 考试模式下选项乱序映射 {question_index: {shuffled_option: original_option}}
+        self.reverse_mapping = {}  # 反向映射 {question_index: {original_option: shuffled_option}}
         
         self.setup_ui()
+    
+    def set_window_icon(self, window):
+        """设置窗口图标"""
+        try:
+            # 获取图标文件路径（使用绝对路径）
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.abspath(os.path.join(base_dir, "QAQ.ico"))
+            
+            # 检查文件是否存在
+            if os.path.exists(icon_path):
+                print(f"找到图标文件: {icon_path}")
+                # Windows系统使用iconbitmap
+                if os.name == 'nt':  # Windows
+                    try:
+                        # 方法1: 直接使用绝对路径
+                        window.iconbitmap(icon_path)
+                    except Exception as e1:
+                        try:
+                            # 方法2: 使用 @ 前缀（某些情况下需要）
+                            window.iconbitmap('@' + icon_path)
+                        except Exception as e2:
+                            try:
+                                # 方法3: 使用 iconphoto（也支持 Windows）
+                                img = Image.open(icon_path)
+                                photo = ImageTk.PhotoImage(img)
+                                window.iconphoto(True, photo)
+                                # 保存引用防止被垃圾回收
+                                window._icon_photo = photo
+                            except Exception as e3:
+                                print(f"所有图标设置方法都失败:")
+                                print(f"  iconbitmap: {str(e1)}")
+                                print(f"  iconbitmap(@): {str(e2)}")
+                                print(f"  iconphoto: {str(e3)}")
+                else:
+                    # Linux/Mac系统需要转换为PhotoImage
+                    try:
+                        img = Image.open(icon_path)
+                        photo = ImageTk.PhotoImage(img)
+                        window.iconphoto(True, photo)
+                        # 保存引用防止被垃圾回收
+                        window._icon_photo = photo
+                    except Exception as e:
+                        print(f"设置图标失败（非Windows系统）: {str(e)}")
+            else:
+                print(f"图标文件不存在: {icon_path}")
+        except Exception as e:
+            print(f"设置窗口图标失败: {str(e)}")
     
     def setup_ui(self):
         """设置用户界面"""
@@ -343,6 +395,7 @@ class ExamApp:
         dialog.geometry("350x300")
         dialog.transient(self.root)
         dialog.grab_set()
+        self.set_window_icon(dialog)
         
         # 主框架
         main_dialog_frame = ttk.Frame(dialog, padding="10")
@@ -510,6 +563,7 @@ class ExamApp:
         dialog.geometry("300x150")
         dialog.transient(self.root)
         dialog.grab_set()
+        self.set_window_icon(dialog)
         
         ttk.Label(dialog, text="请输入考试题目数量：").pack(pady=10)
         
@@ -530,6 +584,8 @@ class ExamApp:
                 self.current_questions = random.sample(self.bank.questions, count)
                 self.current_index = 0
                 self.exam_answers = {}
+                self.option_mapping = {}  # 清空选项映射
+                self.reverse_mapping = {}  # 清空反向映射
                 self.exam_start_time = datetime.now()
                 self.back_button.config(state=tk.DISABLED)  # 隐藏返回按钮
                 
@@ -560,6 +616,7 @@ class ExamApp:
         dialog.title("搜题")
         dialog.geometry("450x350")
         dialog.transient(self.root)
+        self.set_window_icon(dialog)
         
         # 主框架
         main_frame = ttk.Frame(dialog, padding="15")
@@ -691,35 +748,88 @@ class ExamApp:
         # 判断是单选还是多选
         is_multiple = len(question.answer) > 1
         
+        # 获取所有存在的选项
+        available_options = [opt for opt in ['A', 'B', 'C', 'D'] if opt in question.options]
+        
+        # 如果是考试模式，打乱选项内容的顺序
+        if self.exam_mode:
+            # 如果该题目已经有映射关系，使用已有的（保证切换题目时选项顺序不变）
+            if self.current_index in self.option_mapping:
+                # 使用已有的映射
+                mapping = self.option_mapping[self.current_index]
+                # 从映射中获取打乱后的选项顺序（按A、B、C、D顺序显示，但内容已打乱）
+                display_options = ['A', 'B', 'C', 'D']
+                shuffled_contents = {}  # {display_option: (original_option, content)}
+                for display_opt in display_options:
+                    if display_opt in mapping:
+                        original_opt = mapping[display_opt]
+                        shuffled_contents[display_opt] = (original_opt, question.options[original_opt])
+            else:
+                # 创建选项内容列表并打乱
+                option_items = [(opt, question.options[opt]) for opt in available_options]
+                random.shuffle(option_items)  # 真正打乱选项内容的顺序
+                
+                # 创建映射：显示标签(A/B/C/D) -> 原始选项
+                # 显示时按A、B、C、D顺序，但内容来自打乱后的列表
+                mapping = {}
+                shuffled_contents = {}
+                display_labels = ['A', 'B', 'C', 'D']
+                for i, (original_opt, content) in enumerate(option_items):
+                    if i < len(display_labels):
+                        display_label = display_labels[i]
+                        mapping[display_label] = original_opt
+                        shuffled_contents[display_label] = (original_opt, content)
+                
+                # 创建反向映射：原始选项 -> 显示标签
+                reverse_mapping = {original: display for display, original in mapping.items()}
+                
+                # 保存映射关系
+                self.option_mapping[self.current_index] = mapping
+                self.reverse_mapping[self.current_index] = reverse_mapping
+                
+                display_options = list(mapping.keys())
+        else:
+            # 非考试模式，使用原始顺序
+            display_options = available_options
+            shuffled_contents = None
+        
         # 创建选项控件
-        for option in ['A', 'B', 'C', 'D']:
-            if option in question.options:
-                text = f"{option}. {question.options[option]}"
-                if is_multiple:
-                    # 多选题使用Checkbutton
-                    var = tk.BooleanVar()
-                    self.option_vars[option] = var
-                    btn = ttk.Checkbutton(
-                        self.options_frame,
-                        text=text,
-                        variable=var,
-                        command=lambda opt=option: self.on_option_selected(opt)
-                    )
-                else:
-                    # 单选题使用Radiobutton，需要共享同一个变量
-                    if 'radio_var' not in self.option_vars:
-                        self.option_vars['radio_var'] = tk.StringVar()
-                    var = self.option_vars['radio_var']
-                    self.option_vars[option] = var
-                    btn = ttk.Radiobutton(
-                        self.options_frame,
-                        text=text,
-                        variable=var,
-                        value=option,
-                        command=lambda opt=option: self.on_option_selected(opt)
-                    )
-                btn.pack(anchor=tk.W, pady=5)
-                self.option_buttons[option] = btn
+        for option in display_options:
+            # 获取选项内容
+            if self.exam_mode and shuffled_contents:
+                # 考试模式：使用打乱后的内容
+                original_option, option_text = shuffled_contents[option]
+                display_label = f"{option}. {option_text}"  # 显示标签是A/B/C/D，但内容是打乱的
+            else:
+                # 非考试模式：正常显示
+                option_text = question.options[option]
+                display_label = f"{option}. {option_text}"
+            
+            if is_multiple:
+                # 多选题使用Checkbutton
+                var = tk.BooleanVar()
+                self.option_vars[option] = var
+                btn = ttk.Checkbutton(
+                    self.options_frame,
+                    text=display_label,
+                    variable=var,
+                    command=lambda opt=option: self.on_option_selected(opt)
+                )
+            else:
+                # 单选题使用Radiobutton，需要共享同一个变量
+                if 'radio_var' not in self.option_vars:
+                    self.option_vars['radio_var'] = tk.StringVar()
+                var = self.option_vars['radio_var']
+                self.option_vars[option] = var
+                btn = ttk.Radiobutton(
+                    self.options_frame,
+                    text=display_label,
+                    variable=var,
+                    value=option,
+                    command=lambda opt=option: self.on_option_selected(opt)
+                )
+            btn.pack(anchor=tk.W, pady=5)
+            self.option_buttons[option] = btn
     
     def display_image(self, question):
         """显示题目图片"""
@@ -842,17 +952,38 @@ class ExamApp:
             return
         
         question = self.current_questions[self.current_index]
-        answer_text = f"正确答案: {question.answer}"
+        
+        # 如果是考试模式，需要将正确答案映射到打乱后的选项
+        if self.exam_mode and self.current_index in self.reverse_mapping:
+            # 将原始正确答案映射到打乱后的选项
+            reverse_map = self.reverse_mapping[self.current_index]
+            shuffled_correct_answer = ''.join(sorted([reverse_map.get(opt, opt) for opt in question.answer]))
+            answer_text = f"正确答案: {shuffled_correct_answer}"
+        else:
+            answer_text = f"正确答案: {question.answer}"
         
         # 检查用户答案（如果有）
         if self.exam_mode and self.current_index in self.exam_answers:
-            user_answer = ''.join(sorted(self.exam_answers[self.current_index]))
+            # 将用户选择的打乱后的选项映射回原始选项
+            user_shuffled = self.exam_answers[self.current_index]
+            if self.current_index in self.option_mapping:
+                mapping = self.option_mapping[self.current_index]
+                user_original = ''.join(sorted([mapping.get(opt, opt) for opt in user_shuffled]))
+            else:
+                user_original = ''.join(sorted(user_shuffled))
+            
             correct_answer = ''.join(sorted(question.answer))
-            if user_answer == correct_answer:
-                answer_text += f" ✓ 您的答案: {user_answer} (正确)"
+            if user_original == correct_answer:
+                answer_text += f" ✓ 您的答案: {''.join(sorted(user_shuffled))} (正确)"
                 self.answer_label.config(foreground="green")
             else:
-                answer_text += f" ✗ 您的答案: {user_answer} (错误)"
+                # 获取打乱后的正确答案用于显示
+                if self.current_index in self.reverse_mapping:
+                    reverse_map = self.reverse_mapping[self.current_index]
+                    shuffled_correct = ''.join(sorted([reverse_map.get(opt, opt) for opt in question.answer]))
+                else:
+                    shuffled_correct = question.answer
+                answer_text += f" ✗ 您的答案: {''.join(sorted(user_shuffled))} (错误，应为: {shuffled_correct})"
                 self.answer_label.config(foreground="red")
         else:
             self.answer_label.config(foreground="green")
@@ -919,11 +1050,19 @@ class ExamApp:
         unanswered = 0
         
         for i, question in enumerate(self.current_questions):
-            user_answer = ''.join(sorted(self.exam_answers.get(i, [])))
+            # 获取用户选择的打乱后的选项
+            user_shuffled = self.exam_answers.get(i, [])
+            # 将打乱后的选项映射回原始选项
+            if i in self.option_mapping:
+                mapping = self.option_mapping[i]
+                user_original = ''.join(sorted([mapping.get(opt, opt) for opt in user_shuffled]))
+            else:
+                user_original = ''.join(sorted(user_shuffled))
+            
             correct_answer = ''.join(sorted(question.answer))
-            if not user_answer:
+            if not user_original:
                 unanswered += 1
-            elif user_answer == correct_answer:
+            elif user_original == correct_answer:
                 correct += 1
             else:
                 wrong += 1
@@ -962,10 +1101,19 @@ class ExamApp:
         """显示错题"""
         wrong_questions = []
         for i, question in enumerate(self.current_questions):
-            user_answer = ''.join(sorted(self.exam_answers.get(i, [])))
+            # 获取用户选择的打乱后的选项
+            user_shuffled = self.exam_answers.get(i, [])
+            # 将打乱后的选项映射回原始选项
+            if i in self.option_mapping:
+                mapping = self.option_mapping[i]
+                user_original = ''.join(sorted([mapping.get(opt, opt) for opt in user_shuffled]))
+            else:
+                user_original = ''.join(sorted(user_shuffled))
+            
             correct_answer = ''.join(sorted(question.answer))
-            if not user_answer or user_answer != correct_answer:
-                wrong_questions.append((i, question, user_answer, correct_answer))
+            if not user_original or user_original != correct_answer:
+                # 保存用户实际看到的答案（打乱后的）和正确答案
+                wrong_questions.append((i, question, ''.join(sorted(user_shuffled)), correct_answer))
         
         if not wrong_questions:
             messagebox.showinfo("恭喜", "全部答对！")
@@ -975,6 +1123,7 @@ class ExamApp:
         wrong_window = tk.Toplevel(self.root)
         wrong_window.title("错题回顾")
         wrong_window.geometry("800x600")
+        self.set_window_icon(wrong_window)
         
         text_widget = scrolledtext.ScrolledText(wrong_window, wrap=tk.WORD, font=("Arial", 10))
         text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -983,11 +1132,18 @@ class ExamApp:
             text_widget.insert(tk.END, f"\n{'='*60}\n")
             text_widget.insert(tk.END, f"错题 {idx} (原题号: {question.j_id})\n")
             text_widget.insert(tk.END, f"{question.question}\n\n")
+            # 显示原始选项顺序（不是打乱后的）
             for opt in ['A', 'B', 'C', 'D']:
                 if opt in question.options:
                     text_widget.insert(tk.END, f"{opt}. {question.options[opt]}\n")
             text_widget.insert(tk.END, f"\n您的答案: {user_ans if user_ans else '(未答)'}\n")
-            text_widget.insert(tk.END, f"正确答案: {correct_ans}\n")
+            # 如果是考试模式，需要显示打乱后的正确答案
+            if i in self.reverse_mapping:
+                reverse_map = self.reverse_mapping[i]
+                shuffled_correct = ''.join(sorted([reverse_map.get(opt, opt) for opt in correct_ans]))
+                text_widget.insert(tk.END, f"正确答案: {shuffled_correct}\n")
+            else:
+                text_widget.insert(tk.END, f"正确答案: {correct_ans}\n")
         
         text_widget.config(state=tk.DISABLED)
 
